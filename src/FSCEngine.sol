@@ -83,6 +83,7 @@ contract FSCEngine is ReentrancyGuard {
     // Events //
     /////////////
     event CollateralDeposited(address indexed user, address indexed token, uint256 indexed amount);
+    event CollateralRedeemed(address indexed user, address indexed token, uint256 indexed amount);
 
 
     /////////////
@@ -122,7 +123,16 @@ contract FSCEngine is ReentrancyGuard {
     // External Functions //
     /////////////
 
-    function depositCollateralAndMintFsc() external {}
+    /*
+    * @param tokenCollateralAddress The address of the token to be deposited as collateral.
+    *@param amountCollateral The amount of collateral to be deposited.
+    *@param amountFscToMint The amount of FSC to be minted.
+    *@notice this function deposits your collateral and mints DSC in one transaction
+    */
+    function depositCollateralAndMintFsc(address tokenCollateralAddress, uint256 amountCollateral, uint256 amountFscToMint) external {
+      depositCollateral(tokenCollateralAddress, amountCollateral);
+      mintFsc(amountFscToMint);
+    }
 
     /*
     @notice Follows CEI pattern
@@ -130,7 +140,7 @@ contract FSCEngine is ReentrancyGuard {
     @param amountCollateral The amount of collateral to be deposited.
     */
     function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateralAddress)
         nonReentrant
@@ -143,9 +153,31 @@ contract FSCEngine is ReentrancyGuard {
         }
     }
 
-    function redeemCollateralForFsc() external {}
+    /*
+    * @param tokenCollateralAddress The collateral address to redeem.
+    * @param amountCollateral The amount of collateral to redeem.
+    * @param amountFscToBurn The amount of FSC to burn.
+    * This function burns FSC and redeems collateral in one transaction.
+    */
+    function redeemCollateralForFsc(address tokenCollateralAddress, uint256 amountCollateral, uint256 amountFscToBurn) external {
+      burnFsc(amountFscToBurn);
+      redeemCollateral(tokenCollateralAddress, amountCollateral);
+      // redeemCollateral already checks health factor
+    }
 
-    function redeemCollateral() external {}
+    // in order to redeem collateral
+    // 1. health factor must be over 1 AFTEr collateral pull 
+    // CEI: Check, Effects, Interactions
+    function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral) public moreThanZero(amountCollateral) nonReentrant {
+      s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
+      emit CollateralRedeemed(msg.sender, tokenCollateralAddress, amountCollateral);
+
+      bool success = IERC20(tokenCollateralAddress).transfer(msg.sender, amountCollateral);
+      if (!success) {
+        revert FSCEngine__TransferFailed();
+      }
+      _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /*
      * @notice Follows CEI pattern
@@ -153,7 +185,7 @@ contract FSCEngine is ReentrancyGuard {
      * @notice they must have more collateral value than the min threshold. 
      */
     // Check if the collateral value > FSC. Price feeds, etc.
-    function mintFsc(uint256 amountFscToMint) external moreThanZero(amountFscToMint) nonReentrant {
+    function mintFsc(uint256 amountFscToMint) public moreThanZero(amountFscToMint) nonReentrant {
       s_FSCMinted[msg.sender] += amountFscToMint;
       // if they mint too much ($150 DSC, $100 ETH), then they can't mint and should revert
       _revertIfHealthFactorIsBroken(msg.sender);
@@ -163,7 +195,16 @@ contract FSCEngine is ReentrancyGuard {
       }
     }
 
-    function burnFsc() external {}
+    function burnFsc(uint256 amount) public moreThanZero(amount) {
+      s_FSCMinted[msg.sender] -= amount;
+      bool success = i_fsc.transferFrom(msg.sender, address(this), amount);
+      // hypothetically this conditional is unreachable
+      if (!success) {
+        revert FSCEngine__TransferFailed();
+      }
+      i_fsc.burn(amount);
+      _revertIfHealthFactorIsBroken(msg.sender); // prolly don't need this but hypothetically it's like burning too much ($150 FSC, $100 ETH)
+    }
 
     function liquidate() external {}
 
