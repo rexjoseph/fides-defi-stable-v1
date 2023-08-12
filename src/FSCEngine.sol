@@ -61,6 +61,7 @@ contract FSCEngine is ReentrancyGuard {
     error FSCEngine__TransferFailed();
     error FSCEngine__BreaksHealthFactor(uint256 healthFactor);
     error FSCEngine__MintFailed();
+    error FSC__HealthFactorOk();
 
     /////////////
     // State Variables //
@@ -69,7 +70,8 @@ contract FSCEngine is ReentrancyGuard {
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_THRESHOLD = 50;
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MIN_HEALTH_FACTOR = 1;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+    uint256 private constant LIQUIDATION_BONUS = 10; // 10% bonus
 
     mapping(address token => address priceFeed) private s_priceFeeds; // maps token address to token price feed
     mapping(address user => mapping(address => uint256 amount)) private s_collateralDeposited; // tracks how much collateral each user has deposited essentially mapping to a mapping. map users balances to mapping of token address to amount.
@@ -206,7 +208,30 @@ contract FSCEngine is ReentrancyGuard {
       _revertIfHealthFactorIsBroken(msg.sender); // prolly don't need this but hypothetically it's like burning too much ($150 FSC, $100 ETH)
     }
 
-    function liquidate() external {}
+    // if we start nearing undercollateralization, we need someone to liquidate positions
+    // If someone becomes undercollateralized, we pay you to liquidate them
+    /*
+    * @param collateral The collateral to be liquidated.
+    * @param user The user to be liquidated. Their health factor must be below MIN_HEALTH_FACTOR.
+    * @param debtToCover The amount of debt to cover. Essentially the amount of FSC to burn to improve the users health factor
+    * @notice You can partially liquidate a user. You don't have to liquidate all their debt.
+    * @notice you will get a liquidation bonus for taking the users funds
+    * @notice This function working assumes the protocl will be roughly 200% overcollateralized for this to work.
+    * @notice a known bug would be if the protocol were 100% or less collateralized, then we wouldn't be able to incentivize the liquidator to liquidate the user.
+    * For example, if the price of the collateral plummeted before anyone could be liquidated
+    * Follows CEI: Checks, Effects & Interactions
+    */
+    function liquidate(address collateral, address user, uint256 debtToCover) external moreThanZero(debtToCover) nonReentrant {
+      // check health factor of the user
+      uint256 startingUserHealthFactor = _healthFactor(user);
+      if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+        revert FSC__HealthFactorOk();
+      }
+      // burn their FSC debt then take their collateral
+      uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(collateral, debtToCover);
+      uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+      uint256 totalCollateralToRedeem = tokenAmountFromDebtCovered + bonusCollateral;
+    }
 
     function getHealthFactor() external view {}
 
@@ -246,6 +271,13 @@ contract FSCEngine is ReentrancyGuard {
     /////////////
     // Public & Internal View Functions //
     /////////////
+    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns(uint256) {
+      // get the price of ETH
+      AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+      (,int256 price ,,,) = priceFeed.latestRoundData();
+      return (usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION);
+    }
+
     function getAccountCollateralValue(address user) public view returns(uint256 totalCollateralValueInUsd) {
       // loop through each collateral token, get the amount they have deposited, and map it to the price, to get the USD value
       for (uint256 i = 0; i < s_collateralTokens.length; i++) {
