@@ -62,6 +62,7 @@ contract FSCEngine is ReentrancyGuard {
     error FSCEngine__BreaksHealthFactor(uint256 healthFactor);
     error FSCEngine__MintFailed();
     error FSC__HealthFactorOk();
+    error FSCEngine__HealthFactorNotImproved();
 
     /////////////
     // State Variables //
@@ -85,7 +86,8 @@ contract FSCEngine is ReentrancyGuard {
     // Events //
     /////////////
     event CollateralDeposited(address indexed user, address indexed token, uint256 indexed amount);
-    event CollateralRedeemed(address indexed user, address indexed token, uint256 indexed amount);
+
+    event CollateralRedeemed(address indexed redeemFrom, address indexed redeemTo, address token, uint256 amount);
 
 
     /////////////
@@ -171,13 +173,7 @@ contract FSCEngine is ReentrancyGuard {
     // 1. health factor must be over 1 AFTEr collateral pull 
     // CEI: Check, Effects, Interactions
     function redeemCollateral(address tokenCollateralAddress, uint256 amountCollateral) public moreThanZero(amountCollateral) nonReentrant {
-      s_collateralDeposited[msg.sender][tokenCollateralAddress] -= amountCollateral;
-      emit CollateralRedeemed(msg.sender, tokenCollateralAddress, amountCollateral);
-
-      bool success = IERC20(tokenCollateralAddress).transfer(msg.sender, amountCollateral);
-      if (!success) {
-        revert FSCEngine__TransferFailed();
-      }
+     _redeemCollateral(msg.sender, msg.sender, tokenCollateralAddress, amountCollateral);
       _revertIfHealthFactorIsBroken(msg.sender);
     }
 
@@ -198,13 +194,7 @@ contract FSCEngine is ReentrancyGuard {
     }
 
     function burnFsc(uint256 amount) public moreThanZero(amount) {
-      s_FSCMinted[msg.sender] -= amount;
-      bool success = i_fsc.transferFrom(msg.sender, address(this), amount);
-      // hypothetically this conditional is unreachable
-      if (!success) {
-        revert FSCEngine__TransferFailed();
-      }
-      i_fsc.burn(amount);
+      _burnFsc(amount, msg.sender, msg.sender);
       _revertIfHealthFactorIsBroken(msg.sender); // prolly don't need this but hypothetically it's like burning too much ($150 FSC, $100 ETH)
     }
 
@@ -229,8 +219,20 @@ contract FSCEngine is ReentrancyGuard {
       }
       // burn their FSC debt then take their collateral
       uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(collateral, debtToCover);
+      
       uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+      
       uint256 totalCollateralToRedeem = tokenAmountFromDebtCovered + bonusCollateral;
+
+      _redeemCollateral(user, msg.sender, collateral, totalCollateralToRedeem);
+      _burnFsc(debtToCover, user, msg.sender);
+
+      uint256 endingUserHealthFactor = _healthFactor(user);
+
+      if (endingUserHealthFactor <= startingUserHealthFactor) {
+        revert FSCEngine__HealthFactorNotImproved();
+      }
+      _revertIfHealthFactorIsBroken(msg.sender);
     }
 
     function getHealthFactor() external view {}
@@ -240,6 +242,29 @@ contract FSCEngine is ReentrancyGuard {
     /////////////
 
     // functions with leading underscores(_) tell other developers that they are internal functions
+
+    /*
+    * @dev Low level function here and should not be called unless the function calling it is checking for health factors being broken
+    */
+    function _burnFsc(uint256 amountFscToBurn, address onBehalfOf, address fscFrom) private {
+      s_FSCMinted[onBehalfOf] -= amountFscToBurn;
+      bool success = i_fsc.transferFrom(fscFrom, address(this), amountFscToBurn);
+      // hypothetically this conditional is unreachable
+      if (!success) {
+        revert FSCEngine__TransferFailed();
+      }
+      i_fsc.burn(amountFscToBurn);
+    }
+
+    function _redeemCollateral (address from, address to, address tokenCollateralAddress, uint256 amountCollateral) private {
+      s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
+      emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
+
+      bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
+      if (!success) {
+        revert FSCEngine__TransferFailed();
+      }
+    }
 
    function  _getAccountInformation(address user) private view returns(uint256 totalFscMinted, uint256 collateralValueInUsd) {
       totalFscMinted = s_FSCMinted[user];
