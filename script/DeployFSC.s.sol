@@ -11,7 +11,7 @@ contract DeployFSC is Script {
   address[] public tokenAddresses;
   address[] public priceFeedAddresses;
 
-  function run() external returns (FidesStableCoin, FSCEngine) {
+  function run() external returns (FidesStableCoin, FSCEngine, HelperConfig) {
     HelperConfig config = new HelperConfig();
 
     (address wethUsdPriceFeed, address wbtcUsdPriceFeed, address weth, address wbtc, uint256 deployerKey) = config.activeNetworkConfig();
@@ -25,6 +25,6 @@ contract DeployFSC is Script {
     
     fsc.transferOwnership(address(engine));
     vm.stopBroadcast();
-    return (fsc, engine);
+    return (fsc, engine, config);
   }
 }
