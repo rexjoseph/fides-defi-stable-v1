@@ -41,6 +41,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract FidesStableCoin is ERC20Burnable, Ownable {
   error FidesStableCoin__MustBeMoreThanZero();
   error FidesStableCoin__BurnAmountExceedsBalance();
+  error FidesStableCoin__NotZeroAddress();
 
   constructor()ERC20("Fides Stable Coin", "FSC") {
   }
@@ -54,5 +55,16 @@ contract FidesStableCoin is ERC20Burnable, Ownable {
       revert FidesStableCoin__BurnAmountExceedsBalance();
     }
     super.burn(_amount);
+  }
+
+  function mint(address _to, uint256 _amount) external onlyOwner returns (bool){
+    if (_to == address(0)) {
+      revert FidesStableCoin__NotZeroAddress();
+    }
+    if (_amount <= 0) {
+      revert FidesStableCoin__MustBeMoreThanZero();
+    }
+    _mint(_to, _amount);
+    return true;
   }
 }
