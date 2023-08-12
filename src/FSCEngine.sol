@@ -60,6 +60,7 @@ contract FSCEngine is ReentrancyGuard {
     error FSCEngine__NotAllowedToken();
     error FSCEngine__TransferFailed();
     error FSCEngine__BreaksHealthFactor(uint256 healthFactor);
+    error FSCEngine__MintFailed();
 
     /////////////
     // State Variables //
@@ -76,7 +77,7 @@ contract FSCEngine is ReentrancyGuard {
     mapping(address user => uint256 amountFscMinted) private s_FSCMinted;
     address[] private s_collateralTokens; // array of all collateral tokens
 
-    FidesStableCoin private immutable s_fsc;
+    FidesStableCoin private immutable i_fsc;
 
     /////////////
     // Events //
@@ -114,7 +115,7 @@ contract FSCEngine is ReentrancyGuard {
             s_priceFeeds[tokenAddresses[i]] = priceFeedAddresses[i];
             s_collateralTokens.push(tokenAddresses[i]);
         }
-        s_fsc = FidesStableCoin(fscAddress);
+        i_fsc = FidesStableCoin(fscAddress);
     }
 
     /////////////
@@ -156,6 +157,10 @@ contract FSCEngine is ReentrancyGuard {
       s_FSCMinted[msg.sender] += amountFscToMint;
       // if they mint too much ($150 DSC, $100 ETH), then they can't mint and should revert
       _revertIfHealthFactorIsBroken(msg.sender);
+      bool minted = i_fsc.mint(msg.sender, amountFscToMint);
+      if (!minted) {
+        revert FSCEngine__MintFailed();
+      }
     }
 
     function burnFsc() external {}
