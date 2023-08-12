@@ -5,8 +5,8 @@
 // Layout of Contract:
 // version
 // imports
-// errors
 // interfaces, libraries, contracts
+// errors
 // Type declarations
 // State variables
 // Events
@@ -29,42 +29,41 @@ import {ERC20Burnable, ERC20} from "@openzeppelin/contracts/token/ERC20/extensio
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /*
-    * @title FidesStableCoin
-    * @author Rex Joseph
-    * Collateral: Exogenous (ETH & BTC)
-    * Minting: Algorithmic
-    * Relative Stability: Pegged to USD
-    * 
-    * Contract meant to be governed by FSCEngine. Just the ERC20 implementation of our stablecoin system.
-    * 
-   */
+  * @title FidesStableCoin
+  * @author Rex Joseph
+  * Collateral: Exogenous (ETH & BTC)
+  * Minting: Algorithmic
+  * Relative Stability: Pegged to USD
+  * 
+  * Contract meant to be governed by FSCEngine. Just the ERC20 implementation of our stablecoin system.
+  * 
+*/
 contract FidesStableCoin is ERC20Burnable, Ownable {
-  error FidesStableCoin__MustBeMoreThanZero();
-  error FidesStableCoin__BurnAmountExceedsBalance();
-  error FidesStableCoin__NotZeroAddress();
+    error FidesStableCoin__MustBeMoreThanZero();
+    error FidesStableCoin__BurnAmountExceedsBalance();
+    error FidesStableCoin__NotZeroAddress();
 
-  constructor()ERC20("Fides Stable Coin", "FSC") {
-  }
+    constructor() ERC20("Fides Stable Coin", "FSC") {}
 
-  function burn(uint256 _amount) public override onlyOwner {
-    uint256 balance = balanceOf(msg.sender);
-    if (_amount <= 0) {
-      revert FidesStableCoin__MustBeMoreThanZero();
+    function burn(uint256 _amount) public override onlyOwner {
+        uint256 balance = balanceOf(msg.sender);
+        if (_amount <= 0) {
+            revert FidesStableCoin__MustBeMoreThanZero();
+        }
+        if (balance < _amount) {
+            revert FidesStableCoin__BurnAmountExceedsBalance();
+        }
+        super.burn(_amount);
     }
-    if (balance < _amount) {
-      revert FidesStableCoin__BurnAmountExceedsBalance();
-    }
-    super.burn(_amount);
-  }
 
-  function mint(address _to, uint256 _amount) external onlyOwner returns (bool){
-    if (_to == address(0)) {
-      revert FidesStableCoin__NotZeroAddress();
+    function mint(address _to, uint256 _amount) external onlyOwner returns (bool) {
+        if (_to == address(0)) {
+            revert FidesStableCoin__NotZeroAddress();
+        }
+        if (_amount <= 0) {
+            revert FidesStableCoin__MustBeMoreThanZero();
+        }
+        _mint(_to, _amount);
+        return true;
     }
-    if (_amount <= 0) {
-      revert FidesStableCoin__MustBeMoreThanZero();
-    }
-    _mint(_to, _amount);
-    return true;
-  }
 }
