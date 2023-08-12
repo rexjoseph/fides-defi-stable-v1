@@ -26,6 +26,7 @@
 pragma solidity ^0.8.18;
 
 import {ERC20Burnable, ERC20} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /*
     * @title FidesStableCoin
@@ -37,8 +38,21 @@ import {ERC20Burnable, ERC20} from "@openzeppelin/contracts/token/ERC20/extensio
     * Contract meant to be governed by FSCEngine. Just the ERC20 implementation of our stablecoin system.
     * 
    */
-contract FidesStableCoin is ERC20Burnable {
-  constructor()ERC20("Fides Stable Coin", "FSC") {
+contract FidesStableCoin is ERC20Burnable, Ownable {
+  error FidesStableCoin__MustBeMoreThanZero();
+  error FidesStableCoin__BurnAmountExceedsBalance();
 
+  constructor()ERC20("Fides Stable Coin", "FSC") {
+  }
+
+  function burn(uint256 _amount) public override onlyOwner {
+    uint256 balance = balanceOf(msg.sender);
+    if (_amount <= 0) {
+      revert FidesStableCoin__MustBeMoreThanZero();
+    }
+    if (balance < _amount) {
+      revert FidesStableCoin__BurnAmountExceedsBalance();
+    }
+    super.burn(_amount);
   }
 }
