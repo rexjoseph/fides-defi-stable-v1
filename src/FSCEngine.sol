@@ -318,4 +318,8 @@ contract FSCEngine is ReentrancyGuard {
       (,int256 price ,,,) = priceFeed.latestRoundData();
       return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
     }
+
+    function getAccountInformation(address user) external view returns(uint256 totalFscMinted, uint256 collateralValueInUsd) {
+      (totalFscMinted, collateralValueInUsd) = _getAccountInformation(user);
+    }
 }
