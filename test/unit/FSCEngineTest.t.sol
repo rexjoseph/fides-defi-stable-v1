@@ -1,73 +1,123 @@
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.8.18;
-import {Test} from "forge-std/Test.sol";
 import {DeployFSC} from "../../script/DeployFSC.s.sol";
-import {FidesStableCoin} from "../../src/FidesStableCoin.sol";
 import {FSCEngine} from "../../src/FSCEngine.sol";
+import {FidesStableCoin} from "../../src/FidesStableCoin.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {MockV3Aggregator} from "../mocks/MockV3Aggregator.sol";
+import {MockMoreDebtFSC} from "../mocks/MockMoreDebtFSC.sol";
+import {MockFailedMintFSC} from "../mocks/MockFailedMintFSC.sol";
+import {MockFailedTransferFrom} from "../mocks/MockFailedTransferFrom.sol";
+import {MockFailedTransfer} from "../mocks/MockFailedTransfer.sol";
+import {Test, console} from "forge-std/Test.sol";
+import {StdCheats} from "forge-std/StdCheats.sol";
 
-contract FSCEngineTest is Test {
-  DeployFSC deployer;
-  FidesStableCoin fsc;
-  FSCEngine fsce;
-  HelperConfig config;
-  address ethUsdPriceFeed;
-  address btcUsdPriceFeed;
-  address weth;
+contract FSCEngineTest is StdCheats, Test {
+  event CollateralRedeemed(address indexed redeemFrom, address indexed redeemTo, address token, uint256 amount);
 
-  address public USER = makeAddr("user");
-  uint256 public constant AMOUNT_COLLATERAL = 10 ether;
-  uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
+  FSCEngine public fsce;
+  FidesStableCoin public fsc;
+  HelperConfig public helperConfig;
+
+  address public ethUsdPriceFeed;
+  address public btcUsdPriceFeed;
+  address public weth;
+  address public wbtc;
+  uint256 public deployerKey;
+
+  uint256 amountCollateral = 10 ether;
+  uint256 amountToMint = 100 ether;
+  address public user = address(1);
+
+  uint256 public constant STARTING_USER_BALANCE = 10 ether;
+  uint256 public constant MIN_HEALTH_FACTOR = 1e18;
+  uint256 public constant LIQUIDATION_THRESHOLD = 50;
+
+  // Liquidation
+  address public liquidator = makeAddr("liquidator");
+  uint256 public collateralToCover = 20 ether;
 
   // deploy
-  function setUp() public {
-    deployer = new DeployFSC();
-    (fsc, fsce, config) = deployer.run();
-    (ethUsdPriceFeed, btcUsdPriceFeed, weth,,) = config.activeNetworkConfig();
-    ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
+  function setUp() external {
+    DeployFSC deployer = new DeployFSC();
+    (fsc, fsce, helperConfig) = deployer.run();
+    (ethUsdPriceFeed, btcUsdPriceFeed, weth, wbtc, deployerKey) = helperConfig.activeNetworkConfig();
+    if (block.chainid == 31337) {
+        vm.deal(user, STARTING_USER_BALANCE);
+    }
+    ERC20Mock(weth).mint(user, STARTING_USER_BALANCE);
+    ERC20Mock(wbtc).mint(user, STARTING_USER_BALANCE);
   }
 
   /////////////
   // Constructore tests //
   /////////////
   address[] public tokenAddresses; // some public address arrays
-  address[] public priceFeedAddresses;
+  address[] public feedAddresses;
 
   function testRevertsIfTokenLengthDoesntMatchPriceFeeds() public {
     tokenAddresses.push(weth);
-    priceFeedAddresses.push(ethUsdPriceFeed);
-    priceFeedAddresses.push(btcUsdPriceFeed);
+    feedAddresses.push(ethUsdPriceFeed);
+    feedAddresses.push(btcUsdPriceFeed);
 
-    vm.expectRevert(FSCEngine.FSCEngine__TokenAddressesAndPriceFeedAddressesMustBeSameLength.selector);
-    new FSCEngine(tokenAddresses, priceFeedAddresses, address(fsc));
+    vm.expectRevert(FSCEngine.FSCEngine__TokenAddressesAndPriceFeedAddressesAmountsDontMatch.selector);
+    new FSCEngine(tokenAddresses, feedAddresses, address(fsc));
   }
 
   /////////////
   // Price tests //
   /////////////
 
+  function testGetTokenAmountFromUsd() public {
+    // If we want $100 of WETH @ $2000/WETH, that would be 0.05 WETH
+    uint256 expectedWeth = 0.05 ether;
+    uint256 amountWeth = fsce.getTokenAmountFromUsd(weth, 100 ether);
+    assertEq(amountWeth, expectedWeth);
+  }
+
   function testGetUsdValue() public {
     uint256 ethAmount = 15e18;
     uint256 expectedUsd = 30000e18;
-    uint256 actualUsd = fsce.getUsdValue(weth, ethAmount);
-    assertEq(expectedUsd, actualUsd);
-  }
-
-  function testGetTokenAmountFromUsd() public {
-    uint256 usdAmount = 100 ether;
-    uint256 expectedWeth = 0.05 ether;
-    uint256 actualWeth = fsce.getTokenAmountFromUsd(weth, usdAmount);
-    assertEq(expectedWeth, actualWeth);
+    uint256 usdValue = fsce.getUsdValue(weth, ethAmount);
+    assertEq(usdValue, expectedUsd);
   }
 
   /////////////
   // depositCollateral tests //
   /////////////
+
+  // this test needs it's own setup
+  function testRevertsIfTransferFromFails() public {
+      // Arrange - Setup
+      address owner = msg.sender;
+      vm.prank(owner);
+      MockFailedTransferFrom mockFsc = new MockFailedTransferFrom();
+      tokenAddresses = [address(mockFsc)];
+      feedAddresses = [ethUsdPriceFeed];
+      vm.prank(owner);
+      FSCEngine mockFsce = new FSCEngine(
+          tokenAddresses,
+          feedAddresses,
+          address(mockFsc)
+      );
+      mockFsc.mint(user, amountCollateral);
+
+      vm.prank(owner);
+      mockFsc.transferOwnership(address(mockFsce));
+      // Arrange - User
+      vm.startPrank(user);
+      ERC20Mock(address(mockFsc)).approve(address(mockFsce), amountCollateral);
+      // Act / Assert
+      vm.expectRevert(FSCEngine.FSCEngine__TransferFailed.selector);
+      mockFsce.depositCollateral(address(mockFsc), amountCollateral);
+      vm.stopPrank();
+  }
+
   function testRevertsIfCollateralZero() public {
-    vm.startPrank(USER);
-    ERC20Mock(weth).approve(address(fsce), AMOUNT_COLLATERAL);
+    vm.startPrank(user);
+    ERC20Mock(weth).approve(address(fsce), amountCollateral);
 
     vm.expectRevert(FSCEngine.FSCEngine__NeedsMoreThanZero.selector);
     fsce.depositCollateral(weth, 0);
@@ -75,28 +125,35 @@ contract FSCEngineTest is Test {
   } 
 
   function testRevertsWithUnapprovedCollateral() public {
-    ERC20Mock ranToken = new ERC20Mock("RAN", "RAN", USER, AMOUNT_COLLATERAL);
-    vm.startPrank(USER);
-    vm.expectRevert(FSCEngine.FSCEngine__NotAllowedToken.selector);
-    fsce.depositCollateral(address(ranToken), AMOUNT_COLLATERAL);
+    ERC20Mock randToken = new ERC20Mock("RAN", "RAN", user, 100e18);
+    vm.startPrank(user);
+    vm.expectRevert(abi.encodeWithSelector(FSCEngine.FSCEngine__TokenNotAllowed.selector, address(randToken)));
+    fsce.depositCollateral(address(randToken), amountCollateral);
     vm.stopPrank();
   }
 
-  modifier depositCollateral() {
-    vm.startPrank(USER);
-    ERC20Mock(weth).approve(address(fsce), AMOUNT_COLLATERAL);
-    fsce.depositCollateral(weth, AMOUNT_COLLATERAL);
+  modifier depositedCollateral() {
+    vm.startPrank(user);
+    ERC20Mock(weth).approve(address(fsce), amountCollateral);
+    fsce.depositCollateral(weth, amountCollateral);
     vm.stopPrank();
     _;
   }
 
-  function testCanDepositCollateralAndGetAccountInfo() public depositCollateral {
-    (uint256 totalFscMinted, uint256 collateralValueInUsd) = fsce.getAccountInformation(USER);
-    
-    uint256 expectedTotalFscMinted = 0;
-    uint256 expectedDepositAmount = fsce.getTokenAmountFromUsd(weth, collateralValueInUsd);
+  function testCanDepositCollateralWithoutMinting() public depositedCollateral {
+      uint256 userBalance = fsc.balanceOf(user);
+      assertEq(userBalance, 0);
+  }
 
-    assertEq(totalFscMinted, expectedTotalFscMinted);
-    assertEq(AMOUNT_COLLATERAL, expectedDepositAmount);
+  function testCanDepositCollateralAndGetAccountInfo() public depositedCollateral {
+    (uint256 totalFscMinted, uint256 collateralValueInUsd) = fsce.getAccountInformation(user);
+    
+    uint256 expectedDepositedAmount = fsce.getTokenAmountFromUsd(weth, collateralValueInUsd);
+    assertEq(totalFscMinted, 0);
+    assertEq(expectedDepositedAmount, amountCollateral);
   }
 }
+
+/////////////
+  // depositCollateral tests //
+/////////////
